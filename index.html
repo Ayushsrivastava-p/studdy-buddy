@@ -102,19 +102,24 @@
 
       const reader = new FileReader();
       reader.onload = async function() {
-        const typedarray = new Uint8Array(this.result);
-        const pdf = await pdfjsLib.getDocument(typedarray).promise;
-        let fullText = "";
+        try {
+          const typedarray = new Uint8Array(this.result);
+          const pdf = await pdfjsLib.getDocument(typedarray).promise;
+          let fullText = "";
 
-        for (let i = 1; i <= pdf.numPages; i++) {
-          const page = await pdf.getPage(i);
-          const textContent = await page.getTextContent();
-          const pageText = textContent.items.map(item => item.str).join(" ");
-          fullText += `\n--- Page ${i} ---\n` + pageText;
+          for (let i = 1; i <= pdf.numPages; i++) {
+            const page = await pdf.getPage(i);
+            const textContent = await page.getTextContent();
+            const pageText = textContent.items.map(item => item.str).join(" ");
+            fullText += `\n--- Page ${i} ---\n` + pageText;
+          }
+
+          extractedPdfText = fullText;
+          badge.textContent = `Attached: ${file.name} (${pdf.numPages} pages)`;
+        } catch (err) {
+          badge.textContent = "Error reading PDF file.";
+          badge.classList.replace("text-emerald-400", "text-rose-400");
         }
-
-        extractedPdfText = fullText;
-        badge.textContent = `Attached: ${file.name} (${pdf.numPages} pages)`;
       };
       reader.readAsArrayBuffer(file);
     }
@@ -164,46 +169,73 @@
     }
 
     async function callGemini(question, contextText) {
-      const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`;
+      // Stable endpoint with automatic fallback
+      const endpoints = [
+        `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent?key=${apiKey}`,
+        `https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent?key=${apiKey}`,
+        `https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key=${apiKey}`
+      ];
 
-      const systemInstruction = `You are a Study Buddy AI assistant for students.
-OUTPUT FORMAT: Strict valid JSON only, without any markdown formatting or ticks.
-JSON schema:
+      const promptPayload = `You are a Study Buddy AI assistant for students.
+Always reply with valid JSON only (no markdown quotes, no triple backticks).
+JSON format:
 {
   "type": "quiz | explanation | summary | normal",
-  "response": "detailed explanation or summary",
+  "response": "clear student-friendly explanation or summary",
   "quiz": [
-    { "question": "MCQ Question", "options": ["A", "B", "C", "D"], "answer": "Option" }
+    { "question": "MCQ Question", "options": ["A: text", "B: text", "C: text", "D: text"], "answer": "A" }
   ],
-  "short_notes": ["bullet 1", "bullet 2"]
+  "short_notes": ["bullet note 1", "bullet note 2"]
 }
-If user requests quiz/MCQ, populate quiz array with 5 questions.
-If PDF content is provided, base answers on it.`;
 
-      const promptPayload = `PDF CONTENT:
-${contextText || "None provided."}
+Rule: If the user requests a quiz/MCQs, supply 5 questions inside the quiz array.
+Rule: If PDF context is present, prioritize it strictly for answers.
 
-USER QUESTION:
+PDF CONTEXT:
+${contextText || "No document uploaded."}
+
+USER QUERY:
 ${question}`;
 
-      const res = await fetch(endpoint, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          contents: [{ parts: [{ text: promptPayload }] }],
-          systemInstruction: { parts: [{ text: systemInstruction }] },
-          generationConfig: { responseMimeType: "application/json" }
-        })
-      });
+      let lastError = null;
 
-      if (!res.ok) {
-        const err = await res.json();
-        throw new Error(err.error?.message || "Gemini API Request failed");
+      for (let endpoint of endpoints) {
+        try {
+          const res = await fetch(endpoint, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              contents: [{ parts: [{ text: promptPayload }] }]
+            })
+          });
+
+          if (res.ok) {
+            const raw = await res.json();
+            let rawText = raw.candidates?.[0]?.content?.parts?.[0]?.text || "{}";
+            
+            // Clean markdown blocks if present
+            rawText = rawText.replace(/```json/gi, '').replace(/```/g, '').trim();
+            
+            try {
+              return JSON.parse(rawText);
+            } catch (e) {
+              return {
+                type: "normal",
+                response: rawText,
+                quiz: [],
+                short_notes: []
+              };
+            }
+          } else {
+            const errData = await res.json();
+            lastError = errData.error?.message || "Model request error";
+          }
+        } catch (netErr) {
+          lastError = netErr.message;
+        }
       }
 
-      const raw = await res.json();
-      const rawText = raw.candidates[0].content.parts[0].text;
-      return JSON.parse(rawText);
+      throw new Error(lastError || "Failed to communicate with Gemini API.");
     }
 
     function renderResponse(elemId, data) {
