@@ -48,9 +48,9 @@
       <!-- Quick Action Buttons -->
       <div class="bg-[#1c2541]/40 border border-slate-800/80 rounded-2xl p-4 flex flex-col gap-2">
         <p class="text-xs font-semibold text-slate-400 mb-1">Quick Prompts</p>
-        <button onclick="triggerQuickPrompt('Summarize this document thoroughly.')" class="w-full text-left bg-slate-900/60 hover:bg-slate-800 border border-slate-700/60 rounded-xl p-2.5 text-xs text-slate-300 transition">📖 Summarize PDF</button>
-        <button onclick="triggerQuickPrompt('Generate 5 MCQ quiz questions with answers.')" class="w-full text-left bg-slate-900/60 hover:bg-slate-800 border border-slate-700/60 rounded-xl p-2.5 text-xs text-slate-300 transition">❓ Generate Quiz (5 MCQs)</button>
-        <button onclick="triggerQuickPrompt('Give me key short notes and bullet points.')" class="w-full text-left bg-slate-900/60 hover:bg-slate-800 border border-slate-700/60 rounded-xl p-2.5 text-xs text-slate-300 transition">📝 Extract Key Notes</button>
+        <button onclick="triggerQuickPrompt('summary')" class="w-full text-left bg-slate-900/60 hover:bg-slate-800 border border-slate-700/60 rounded-xl p-2.5 text-xs text-slate-300 transition">📖 Summarize PDF</button>
+        <button onclick="triggerQuickPrompt('generate quiz')" class="w-full text-left bg-slate-900/60 hover:bg-slate-800 border border-slate-700/60 rounded-xl p-2.5 text-xs text-slate-300 transition">❓ Generate Quiz (5 MCQs)</button>
+        <button onclick="triggerQuickPrompt('explain the core concepts')" class="w-full text-left bg-slate-900/60 hover:bg-slate-800 border border-slate-700/60 rounded-xl p-2.5 text-xs text-slate-300 transition">📝 Explain Core Concepts</button>
       </div>
     </div>
 
@@ -78,16 +78,27 @@
   </div>
 
   <script>
+    // OPTIONAL: Agar tum chaaho to apni Gemini key yahan quotes ke andar paste kar sakte ho:
+    // e.g., const HARDCODED_API_KEY = "AIzaSy...";
+    const HARDCODED_API_KEY = ""; 
+
     let extractedPdfText = "";
-    let apiKey = localStorage.getItem("gemini_key") || "";
-    if (apiKey) document.getElementById("apiKeyInput").value = apiKey;
+    let apiKey = HARDCODED_API_KEY || localStorage.getItem("gemini_key") || "";
+
+    // Window load hone par check karega aur input field me automatically fill karega
+    window.addEventListener("DOMContentLoaded", () => {
+      const input = document.getElementById("apiKeyInput");
+      if (apiKey) {
+        input.value = apiKey;
+      }
+    });
 
     function saveApiKey() {
       const val = document.getElementById("apiKeyInput").value.trim();
       if (val) {
         localStorage.setItem("gemini_key", val);
         apiKey = val;
-        alert("API Key saved securely in your browser!");
+        alert("API Key permanently saved in your browser!");
       }
     }
 
@@ -98,6 +109,8 @@
       const badge = document.getElementById("fileBadge");
       badge.textContent = `Reading ${file.name}...`;
       badge.classList.remove("hidden");
+      badge.classList.remove("text-rose-400");
+      badge.classList.add("text-emerald-400");
 
       const reader = new FileReader();
       reader.onload = async function() {
@@ -133,21 +146,38 @@
       const input = document.getElementById("promptInput");
       const query = input.value.trim();
       if (!query) return;
+
+      // Agar localStorage ya hardcoded key nahi mili to check input
       if (!apiKey) {
-        alert("Upar right corner me apni Google Gemini API Key enter karke Save Key click karo.");
-        return;
+        apiKey = document.getElementById("apiKeyInput").value.trim();
+        if (apiKey) {
+          localStorage.setItem("gemini_key", apiKey);
+        } else {
+          alert("Pehle top right corner me Gemini API Key daal kar Save Key par click karo.");
+          return;
+        }
       }
 
       input.value = "";
       appendMessage("user", query);
 
-      const loadingId = appendMessage("ai", '<span class="animate-pulse">Thinking & generating...</span>');
+      const loadingId = appendMessage("ai", '<div class="flex items-center gap-2"><span class="animate-spin text-indigo-400">✦</span> <span class="animate-pulse">Thinking & generating...</span></div>');
 
       try {
         const responseData = await callGemini(query, extractedPdfText);
         renderResponse(loadingId, responseData);
       } catch (err) {
-        document.getElementById(loadingId).innerHTML = `<span class="text-rose-400">Error: ${err.message}</span>`;
+        // Freeze hatane ke liye container ko error message se replace karna
+        const errElem = document.getElementById(loadingId);
+        if (errElem) {
+          errElem.innerHTML = `
+            <div class="text-rose-400">
+              <p class="font-semibold mb-1">❌ Request Failed</p>
+              <p class="text-xs text-rose-300/80">${err.message}</p>
+              <p class="text-[11px] text-slate-400 mt-2">Check karein ki aapki Gemini API Key valid hai aur <a href="https://aistudio.google.com" target="_blank" class="underline text-indigo-400">Google AI Studio</a> se generated hai.</p>
+            </div>
+          `;
+        }
       }
     }
 
@@ -174,8 +204,14 @@
           const data = await res.json();
           const models = data.models || [];
           
-          // Preference order of models
-          const preferences = ["gemini-1.5-flash", "gemini-2.0-flash", "gemini-1.5-pro", "gemini-pro"];
+          const preferences = [
+            "gemini-1.5-flash",
+            "gemini-2.0-flash",
+            "gemini-1.5-flash-8b",
+            "gemini-1.5-pro",
+            "gemini-pro"
+          ];
+          
           for (let pref of preferences) {
             const found = models.find(m => m.name.includes(pref) && m.supportedGenerationMethods?.includes("generateContent"));
             if (found) return found.name.replace("models/", "");
@@ -185,7 +221,7 @@
           if (anyValid) return anyValid.name.replace("models/", "");
         }
       } catch (e) {
-        console.warn("Model discovery fallback:", e);
+        console.warn("Fallback to default model");
       }
       return "gemini-1.5-flash-latest";
     }
@@ -194,42 +230,100 @@
       const modelToUse = await getAvailableModel();
       const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${modelToUse}:generateContent?key=${apiKey}`;
 
-      const promptPayload = `You are a Study Buddy AI assistant for students.
-Always reply with valid JSON only (no markdown quotes, no triple backticks).
-JSON format:
+      // n8n workflow ka exact original prompt system instructions ke saath
+      const systemPrompt = `You are a Study Buddy AI assistant for students.
+
+You handle two types of input:
+1. Normal academic questions
+2. PDF-based questions (if context is provided)
+
+You also generate quizzes when requested.
+
+---
+
+TASK DETECTION RULES:
+- If user asks: "quiz / mcq / test me / generate quiz" -> type = "quiz"
+- If user asks: "explain / what is / how / why" -> type = "explanation"
+- If user asks: "summary" -> type = "summary"
+- Otherwise -> type = "normal"
+
+---
+
+PDF RULE:
+- If PDF content is provided, always prioritize it for answers.
+- If no PDF is provided, answer using general knowledge.
+
+---
+
+OUTPUT FORMAT (STRICT JSON ONLY - NO TEXT OUTSIDE JSON):
 {
   "type": "quiz | explanation | summary | normal",
-  "response": "clear student-friendly explanation or summary",
-  "quiz": [
-    { "question": "MCQ Question", "options": ["A: text", "B: text", "C: text", "D: text"], "answer": "A" }
-  ],
-  "short_notes": ["bullet note 1", "bullet note 2"]
+  "response": "",
+  "quiz": [],
+  "short_notes": []
 }
 
-Rule: If user asks for quiz/MCQ, generate 5 questions in the quiz array.
-Rule: If PDF context is present, prioritize it strictly for answers.
+---
 
-PDF CONTEXT:
-${contextText || "No document uploaded."}
+RULES FOR OUTPUT:
+1. ALWAYS return valid JSON only (no markdown, no backticks, no text outside JSON)
+2. NEVER leave JSON malformed
+3. NEVER return empty JSON structure incorrectly
 
-USER QUERY:
+---
+
+TYPE BEHAVIOR:
+If type = quiz:
+- response = "Here is a quiz to test your knowledge"
+- quiz = array of 5 MCQ questions
+- each MCQ must be:
+  {
+    "question": "question text",
+    "options": ["A: option text", "B: option text", "C: option text", "D: option text"],
+    "answer": "A"
+  }
+- short_notes = []
+
+If type = explanation:
+- response = detailed but simple explanation
+- short_notes = bullet points summary
+- quiz = []
+
+If type = summary:
+- response = short summary
+- short_notes = key points
+- quiz = []
+
+If type = normal:
+- response = direct answer to question
+- quiz = []
+- short_notes = []
+
+Keep language simple and student-friendly.`;
+
+      const userContent = `PDF CONTENT:
+${contextText ? contextText : "No PDF uploaded."}
+
+USER QUESTION:
 ${question}`;
 
       const res = await fetch(endpoint, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          contents: [{ parts: [{ text: promptPayload }] }]
+          contents: [{ parts: [{ text: `${systemPrompt}\n\n${userContent}` }] }]
         })
       });
 
       if (!res.ok) {
-        const errData = await res.json();
-        throw new Error(errData.error?.message || "Gemini API Request failed");
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.error?.message || `HTTP ${res.status}: Failed to reach Gemini API`);
       }
 
       const raw = await res.json();
       let rawText = raw.candidates?.[0]?.content?.parts?.[0]?.text || "{}";
+
+      // Markdown blocks hatana taaki clean JSON parse ho
       rawText = rawText.replace(/```json/gi, '').replace(/```/g, '').trim();
 
       try {
@@ -246,6 +340,7 @@ ${question}`;
 
     function renderResponse(elemId, data) {
       const el = document.getElementById(elemId);
+      if (!el) return;
       let html = "";
 
       if (data.response) {
