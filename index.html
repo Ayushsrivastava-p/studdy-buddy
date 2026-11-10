@@ -22,7 +22,7 @@
     </div>
     <div class="flex items-center gap-2">
       <input id="apiKeyInput" type="password" placeholder="Gemini API Key" class="bg-slate-900 border border-slate-700 rounded-lg px-3 py-1.5 text-xs text-slate-200 focus:outline-none focus:border-indigo-500">
-      <button onclick="saveApiKey()" class="bg-slate-800 hover:bg-slate-700 px-3 py-1.5 rounded-lg text-xs font-medium border border-slate-700">Save Key</button>
+      <button onclick="saveApiKey()" class="bg-indigo-600 hover:bg-indigo-500 px-3 py-1.5 rounded-lg text-xs font-medium text-white transition">Save Key</button>
     </div>
   </header>
 
@@ -56,7 +56,6 @@
 
     <!-- Right Column: Interactive Chat & Output -->
     <div class="lg:col-span-8 flex flex-col bg-[#1c2541]/50 border border-slate-800 rounded-2xl overflow-hidden shadow-xl">
-      <!-- Conversation History Container -->
       <div id="chatHistory" class="flex-1 p-6 overflow-y-auto space-y-4 min-h-[420px] max-h-[550px]">
         <div class="flex gap-3">
           <div class="w-7 h-7 rounded-lg bg-indigo-600/30 border border-indigo-500/40 flex items-center justify-center text-indigo-300 text-xs font-bold">AI</div>
@@ -135,7 +134,7 @@
       const query = input.value.trim();
       if (!query) return;
       if (!apiKey) {
-        alert("Pehle upar right corner me apni Google Gemini API Key enter karke Save Key click karo.");
+        alert("Upar right corner me apni Google Gemini API Key enter karke Save Key click karo.");
         return;
       }
 
@@ -168,13 +167,32 @@
       return id;
     }
 
+    async function getAvailableModel() {
+      try {
+        const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${apiKey}`);
+        if (res.ok) {
+          const data = await res.json();
+          const models = data.models || [];
+          
+          // Preference order of models
+          const preferences = ["gemini-1.5-flash", "gemini-2.0-flash", "gemini-1.5-pro", "gemini-pro"];
+          for (let pref of preferences) {
+            const found = models.find(m => m.name.includes(pref) && m.supportedGenerationMethods?.includes("generateContent"));
+            if (found) return found.name.replace("models/", "");
+          }
+          
+          const anyValid = models.find(m => m.supportedGenerationMethods?.includes("generateContent"));
+          if (anyValid) return anyValid.name.replace("models/", "");
+        }
+      } catch (e) {
+        console.warn("Model discovery fallback:", e);
+      }
+      return "gemini-1.5-flash-latest";
+    }
+
     async function callGemini(question, contextText) {
-      // Stable endpoint with automatic fallback
-      const endpoints = [
-        `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent?key=${apiKey}`,
-        `https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent?key=${apiKey}`,
-        `https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key=${apiKey}`
-      ];
+      const modelToUse = await getAvailableModel();
+      const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${modelToUse}:generateContent?key=${apiKey}`;
 
       const promptPayload = `You are a Study Buddy AI assistant for students.
 Always reply with valid JSON only (no markdown quotes, no triple backticks).
@@ -188,7 +206,7 @@ JSON format:
   "short_notes": ["bullet note 1", "bullet note 2"]
 }
 
-Rule: If the user requests a quiz/MCQs, supply 5 questions inside the quiz array.
+Rule: If user asks for quiz/MCQ, generate 5 questions in the quiz array.
 Rule: If PDF context is present, prioritize it strictly for answers.
 
 PDF CONTEXT:
@@ -197,45 +215,33 @@ ${contextText || "No document uploaded."}
 USER QUERY:
 ${question}`;
 
-      let lastError = null;
+      const res = await fetch(endpoint, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          contents: [{ parts: [{ text: promptPayload }] }]
+        })
+      });
 
-      for (let endpoint of endpoints) {
-        try {
-          const res = await fetch(endpoint, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              contents: [{ parts: [{ text: promptPayload }] }]
-            })
-          });
-
-          if (res.ok) {
-            const raw = await res.json();
-            let rawText = raw.candidates?.[0]?.content?.parts?.[0]?.text || "{}";
-            
-            // Clean markdown blocks if present
-            rawText = rawText.replace(/```json/gi, '').replace(/```/g, '').trim();
-            
-            try {
-              return JSON.parse(rawText);
-            } catch (e) {
-              return {
-                type: "normal",
-                response: rawText,
-                quiz: [],
-                short_notes: []
-              };
-            }
-          } else {
-            const errData = await res.json();
-            lastError = errData.error?.message || "Model request error";
-          }
-        } catch (netErr) {
-          lastError = netErr.message;
-        }
+      if (!res.ok) {
+        const errData = await res.json();
+        throw new Error(errData.error?.message || "Gemini API Request failed");
       }
 
-      throw new Error(lastError || "Failed to communicate with Gemini API.");
+      const raw = await res.json();
+      let rawText = raw.candidates?.[0]?.content?.parts?.[0]?.text || "{}";
+      rawText = rawText.replace(/```json/gi, '').replace(/```/g, '').trim();
+
+      try {
+        return JSON.parse(rawText);
+      } catch (e) {
+        return {
+          type: "normal",
+          response: rawText,
+          quiz: [],
+          short_notes: []
+        };
+      }
     }
 
     function renderResponse(elemId, data) {
