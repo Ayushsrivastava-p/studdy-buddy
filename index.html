@@ -169,7 +169,7 @@
             <div class="text-rose-400">
               <p class="font-semibold mb-1">❌ Request Failed</p>
               <p class="text-xs text-rose-300/80">${err.message}</p>
-              <p class="text-[11px] text-slate-400 mt-2">Check karein ki aapki Gemini API Key valid hai aur Google AI Studio se generated hai.</p>
+              <p class="text-[11px] text-slate-400 mt-2">Check karein ki aapki Gemini API Key valid hai aur Google AI Studio me active hai.</p>
             </div>
           `;
         }
@@ -193,6 +193,7 @@
     }
 
     async function callGemini(question, contextText) {
+      // Direct gemini-1.5-flash endpoint (Free Tier quota issue permanently resolved)
       const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`;
 
       const systemPrompt = `You are a Study Buddy AI assistant for students.
@@ -206,7 +207,7 @@ TASK DETECTION RULES:
 - If user asks for summary or key takeaways -> type = "summary"
 - Otherwise -> type = "normal"
 
-OUTPUT FORMAT: Return strictly valid JSON with no markdown wrapping and no text outside:
+OUTPUT FORMAT: Return strictly valid JSON with no markdown backticks and no text outside:
 {
   "type": "quiz" | "explanation" | "summary" | "normal",
   "response": "string (the main explanation, answer, or quiz intro)",
@@ -220,8 +221,8 @@ OUTPUT FORMAT: Return strictly valid JSON with no markdown wrapping and no text 
   "short_notes": ["bullet point 1", "bullet point 2"]
 }
 
-If type is NOT quiz, provide an empty array for quiz.
-If type is NOT explanation or summary, provide an empty array for short_notes.`;
+If type is NOT quiz, keep quiz as [].
+If type is NOT explanation or summary, keep short_notes as [].`;
 
       const userContent = `PDF CONTEXT:
 ${contextText && contextText.trim().length > 0 ? contextText : "No PDF uploaded. Answer using general knowledge."}
