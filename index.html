@@ -193,71 +193,92 @@
     }
 
     async function callGemini(question, contextText) {
-      // Official active free model recommended by Google AI Studio
-      const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent?key=${apiKey}`;
+      // Model priority list: Pehle fast lite version, fir standard flash
+      const candidateModels = [
+        "gemini-2.5-flash-lite",
+        "gemini-3.8-flash"
+      ];
 
-      const systemPrompt = `You are a fast, concise Study Buddy AI. Keep explanations accurate and student-friendly.
+      const systemPrompt = `You are a concise Study Buddy AI. Keep answers clear, accurate, and student-friendly.
 Format: STRICT JSON ONLY.
 Schema:
 {
   "type": "quiz" | "explanation" | "summary" | "normal",
-  "response": "concise clear answer or explanation",
+  "response": "clear direct answer or summary",
   "quiz": [{"question": "text", "options": ["A: ..", "B: ..", "C: ..", "D: .."], "answer": "A"}],
   "short_notes": ["point 1", "point 2"]
 }
-If type is not quiz, set quiz: [].
-If type is not explanation or summary, set short_notes: [].`;
+If type is not quiz, keep quiz: [].
+If type is not explanation or summary, keep short_notes: [].`;
 
       const contextChunk = contextText && contextText.trim().length > 0 
-        ? `\nCONTEXT: ${contextText.slice(0, 15000)}` 
+        ? `\nCONTEXT: ${contextText.slice(0, 12000)}` 
         : "";
 
       const userContent = `QUESTION: ${question}${contextChunk}`;
 
-      // 15 second abort timeout
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 15000);
+      let lastError = null;
 
-      try {
-        const res = await fetch(endpoint, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          signal: controller.signal,
-          body: JSON.stringify({
-            contents: [
-              {
-                role: "user",
-                parts: [{ text: `${systemPrompt}\n\n${userContent}` }]
+      for (const model of candidateModels) {
+        const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
+        
+        // 25 second timeout per attempt for high demand periods
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 25000);
+
+        try {
+          const res = await fetch(endpoint, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            signal: controller.signal,
+            body: JSON.stringify({
+              contents: [
+                {
+                  role: "user",
+                  parts: [{ text: `${systemPrompt}\n\n${userContent}` }]
+                }
+              ],
+              generationConfig: {
+                responseMimeType: "application/json",
+                temperature: 0.2,
+                maxOutputTokens: 900
               }
-            ],
-            generationConfig: {
-              responseMimeType: "application/json",
-              temperature: 0.2,
-              maxOutputTokens: 800 // Fast turnaround to prevent long waiting times
+            })
+          });
+
+          clearTimeout(timeoutId);
+
+          if (!res.ok) {
+            const errData = await res.json().catch(() => ({}));
+            const errMsg = errData.error?.message || `HTTP ${res.status}`;
+            
+            // Agar high demand (503/429) ya model missing ho, toh agla model try karein
+            if (res.status === 503 || res.status === 429 || res.status === 404 || errMsg.includes("high demand") || errMsg.includes("overloaded")) {
+              console.warn(`${model} busy or unavailable. Trying fallback model...`);
+              lastError = new Error(errMsg);
+              continue;
             }
-          })
-        });
+            throw new Error(errMsg);
+          }
 
-        clearTimeout(timeoutId);
+          const raw = await res.json();
+          const rawText = raw.candidates?.[0]?.content?.parts?.[0]?.text;
 
-        if (!res.ok) {
-          const errData = await res.json().catch(() => ({}));
-          throw new Error(errData.error?.message || `HTTP ${res.status}`);
+          if (!rawText) throw new Error("Empty response received.");
+
+          return JSON.parse(rawText);
+        } catch (err) {
+          clearTimeout(timeoutId);
+          if (err.name === "AbortError") {
+            console.warn(`${model} timed out. Trying fallback model...`);
+            lastError = new Error("Request timed out during high demand. Trying alternate route...");
+            continue;
+          }
+          lastError = err;
         }
-
-        const raw = await res.json();
-        const rawText = raw.candidates?.[0]?.content?.parts?.[0]?.text;
-
-        if (!rawText) throw new Error("Empty response received.");
-
-        return JSON.parse(rawText);
-      } catch (err) {
-        clearTimeout(timeoutId);
-        if (err.name === "AbortError") {
-          throw new Error("Request timed out after 15 seconds. Please retry.");
-        }
-        throw err;
       }
+
+      throw lastError || new Error("Servers are currently busy. Please retry in a few seconds.");
     }
 
     function renderResponse(elemId, data) {
