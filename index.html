@@ -169,7 +169,7 @@
             <div class="text-rose-400">
               <p class="font-semibold mb-1">❌ Request Failed</p>
               <p class="text-xs text-rose-300/80">${err.message}</p>
-              <p class="text-[11px] text-slate-400 mt-2">API key check karein ya hard refresh (Ctrl+F5) karein.</p>
+              <p class="text-[11px] text-slate-400 mt-2">Check karein ki aapki key Google AI Studio se valid hai aur active hai.</p>
             </div>
           `;
         }
@@ -193,79 +193,67 @@
     }
 
     async function callGemini(question, contextText) {
-      // Direct gemini-3.8-flash endpoint (Current supported active model)
-      const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent?key=${apiKey}`;
+      const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`;
 
-      const systemPrompt = `You are a Study Buddy AI assistant for students.
-You handle two types of inputs:
-1. Normal academic or conversational questions.
-2. PDF-based questions (when context is provided).
-
-TASK DETECTION RULES:
-- If user asks for quiz, mcq, test, or practice questions -> type = "quiz"
-- If user asks to explain, what is, why, or how -> type = "explanation"
-- If user asks for summary or key takeaways -> type = "summary"
-- Otherwise -> type = "normal"
-
-OUTPUT FORMAT: Return strictly valid JSON with no markdown wrapping and no text outside:
+      const systemPrompt = `You are a concise Study Buddy AI. Keep answers clear, accurate, and student-friendly.
+Format: STRICT JSON ONLY.
+Schema:
 {
   "type": "quiz" | "explanation" | "summary" | "normal",
-  "response": "string",
-  "quiz": [
-    {
-      "question": "string",
-      "options": ["A: text", "B: text", "C: text", "D: text"],
-      "answer": "A"
-    }
-  ],
-  "short_notes": ["bullet point 1", "bullet point 2"]
-}
+  "response": "clear direct answer or explanation",
+  "quiz": [{"question": "text", "options": ["A: text", "B: text", "C: text", "D: text"], "answer": "A"}],
+  "short_notes": ["point 1", "point 2"]
+}`;
 
-If type is NOT quiz, keep quiz as [].
-If type is NOT explanation or summary, keep short_notes as [].`;
+      const contextChunk = contextText && contextText.trim().length > 0 
+        ? `\nCONTEXT: ${contextText.slice(0, 15000)}` 
+        : "";
 
-      const userContent = `PDF CONTEXT:
-${contextText && contextText.trim().length > 0 ? contextText : "No PDF uploaded. Answer using general knowledge."}
+      const userContent = `QUESTION: ${question}${contextChunk}`;
 
-USER QUERY:
-${question}`;
-
-      const res = await fetch(endpoint, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          systemInstruction: {
-            parts: [{ text: systemPrompt }]
-          },
-          contents: [{ parts: [{ text: userContent }] }],
-          generationConfig: {
-            responseMimeType: "application/json",
-            temperature: 0.3
-          }
-        })
-      });
-
-      if (!res.ok) {
-        const errData = await res.json().catch(() => ({}));
-        throw new Error(errData.error?.message || `HTTP ${res.status}: Failed to reach Gemini API`);
-      }
-
-      const raw = await res.json();
-      const rawText = raw.candidates?.[0]?.content?.parts?.[0]?.text;
-
-      if (!rawText) {
-        throw new Error("Empty response received from Gemini.");
-      }
+      // 12 second abort timeout
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 12000);
 
       try {
+        const res = await fetch(endpoint, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          signal: controller.signal,
+          body: JSON.stringify({
+            contents: [
+              {
+                role: "user",
+                parts: [{ text: `${systemPrompt}\n\n${userContent}` }]
+              }
+            ],
+            generationConfig: {
+              responseMimeType: "application/json",
+              temperature: 0.2,
+              maxOutputTokens: 1200
+            }
+          })
+        });
+
+        clearTimeout(timeoutId);
+
+        if (!res.ok) {
+          const errData = await res.json().catch(() => ({}));
+          throw new Error(errData.error?.message || `HTTP ${res.status}`);
+        }
+
+        const raw = await res.json();
+        const rawText = raw.candidates?.[0]?.content?.parts?.[0]?.text;
+
+        if (!rawText) throw new Error("Empty response received.");
+
         return JSON.parse(rawText);
-      } catch (e) {
-        return {
-          type: "normal",
-          response: rawText,
-          quiz: [],
-          short_notes: []
-        };
+      } catch (err) {
+        clearTimeout(timeoutId);
+        if (err.name === "AbortError") {
+          throw new Error("Request timed out. Please retry.");
+        }
+        throw err;
       }
     }
 
