@@ -6,7 +6,7 @@
   <title>Study Buddy - AI Learning</title>
   <!-- Tailwind CSS -->
   <script src="https://cdn.tailwindcss.com"></script>
-  <!-- PDF.js library for client-side PDF parsing -->
+  <!-- PDF.js library -->
   <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
   <script>
     pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
@@ -169,7 +169,7 @@
             <div class="text-rose-400">
               <p class="font-semibold mb-1">❌ Request Failed</p>
               <p class="text-xs text-rose-300/80">${err.message}</p>
-              <p class="text-[11px] text-slate-400 mt-2">Google AI Studio me API key ke permissions aur free quota verify karein.</p>
+              <p class="text-[11px] text-slate-400 mt-2">API key check karein ya hard refresh (Ctrl+F5) karein.</p>
             </div>
           `;
         }
@@ -192,13 +192,41 @@
       return id;
     }
 
+    // Live model detector to avoid 404 or outdated model strings
+    async function resolveActiveFlashModel() {
+      try {
+        const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${apiKey}`);
+        if (res.ok) {
+          const data = await res.json();
+          const list = data.models || [];
+          
+          // Prioritize active flash models with free quota
+          const priority = [
+            "gemini-2.5-flash",
+            "gemini-2.0-flash",
+            "gemini-2.0-flash-lite",
+            "gemini-1.5-flash-8b",
+            "gemini-1.5-flash"
+          ];
+
+          for (let p of priority) {
+            const matched = list.find(m => m.name.includes(p) && m.supportedGenerationMethods?.includes("generateContent"));
+            if (matched) return matched.name; // returns 'models/gemini-...'
+          }
+
+          // Fallback to any model that supports generateContent excluding Pro (quota 0)
+          const anyFlash = list.find(m => !m.name.includes("pro") && m.supportedGenerationMethods?.includes("generateContent"));
+          if (anyFlash) return anyFlash.name;
+        }
+      } catch (e) {
+        console.warn("Could not list models, falling back to gemini-2.0-flash");
+      }
+      return "models/gemini-2.0-flash";
+    }
+
     async function callGemini(question, contextText) {
-      // Primary: gemini-2.0-flash, Fallback: gemini-2.0-flash-lite / gemini-1.5-flash-8b
-      const candidateModels = [
-        "gemini-2.0-flash",
-        "gemini-2.0-flash-lite",
-        "gemini-1.5-flash-8b"
-      ];
+      const modelPath = await resolveActiveFlashModel();
+      const endpoint = `https://generativelanguage.googleapis.com/v1beta/${modelPath}:generateContent?key=${apiKey}`;
 
       const systemPrompt = `You are a Study Buddy AI assistant for students.
 You handle two types of inputs:
@@ -234,47 +262,43 @@ ${contextText && contextText.trim().length > 0 ? contextText : "No PDF uploaded.
 USER QUERY:
 ${question}`;
 
-      let lastError = null;
-
-      for (const model of candidateModels) {
-        const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
-
-        try {
-          const res = await fetch(endpoint, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              systemInstruction: {
-                parts: [{ text: systemPrompt }]
-              },
-              contents: [{ parts: [{ text: userContent }] }],
-              generationConfig: {
-                responseMimeType: "application/json",
-                temperature: 0.3
-              }
-            })
-          });
-
-          if (!res.ok) {
-            const errData = await res.json().catch(() => ({}));
-            lastError = new Error(errData.error?.message || `HTTP ${res.status} on ${model}`);
-            continue; // agla model try karega agar 404 ya unavailable hua
+      const res = await fetch(endpoint, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          systemInstruction: {
+            parts: [{ text: systemPrompt }]
+          },
+          contents: [{ parts: [{ text: userContent }] }],
+          generationConfig: {
+            responseMimeType: "application/json",
+            temperature: 0.3
           }
+        })
+      });
 
-          const raw = await res.json();
-          const rawText = raw.candidates?.[0]?.content?.parts?.[0]?.text;
-
-          if (!rawText) {
-            throw new Error("Empty response received from Gemini.");
-          }
-
-          return JSON.parse(rawText);
-        } catch (e) {
-          lastError = e;
-        }
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.error?.message || `HTTP ${res.status}: Failed to reach Gemini API`);
       }
 
-      throw lastError || new Error("Failed to connect with any available Gemini model.");
+      const raw = await res.json();
+      const rawText = raw.candidates?.[0]?.content?.parts?.[0]?.text;
+
+      if (!rawText) {
+        throw new Error("Empty response received from Gemini.");
+      }
+
+      try {
+        return JSON.parse(rawText);
+      } catch (e) {
+        return {
+          type: "normal",
+          response: rawText,
+          quiz: [],
+          short_notes: []
+        };
+      }
     }
 
     function renderResponse(elemId, data) {
