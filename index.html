@@ -169,7 +169,7 @@
             <div class="text-rose-400">
               <p class="font-semibold mb-1">❌ Request Failed</p>
               <p class="text-xs text-rose-300/80">${err.message}</p>
-              <p class="text-[11px] text-slate-400 mt-2">Check karein ki aapki key Google AI Studio se valid hai aur active hai.</p>
+              <p class="text-[11px] text-slate-400 mt-2">API key check karein ya refresh karein.</p>
             </div>
           `;
         }
@@ -193,17 +193,20 @@
     }
 
     async function callGemini(question, contextText) {
-      const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`;
+      // Official active free model recommended by Google AI Studio
+      const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent?key=${apiKey}`;
 
-      const systemPrompt = `You are a concise Study Buddy AI. Keep answers clear, accurate, and student-friendly.
+      const systemPrompt = `You are a fast, concise Study Buddy AI. Keep explanations accurate and student-friendly.
 Format: STRICT JSON ONLY.
 Schema:
 {
   "type": "quiz" | "explanation" | "summary" | "normal",
-  "response": "clear direct answer or explanation",
-  "quiz": [{"question": "text", "options": ["A: text", "B: text", "C: text", "D: text"], "answer": "A"}],
+  "response": "concise clear answer or explanation",
+  "quiz": [{"question": "text", "options": ["A: ..", "B: ..", "C: ..", "D: .."], "answer": "A"}],
   "short_notes": ["point 1", "point 2"]
-}`;
+}
+If type is not quiz, set quiz: [].
+If type is not explanation or summary, set short_notes: [].`;
 
       const contextChunk = contextText && contextText.trim().length > 0 
         ? `\nCONTEXT: ${contextText.slice(0, 15000)}` 
@@ -211,9 +214,9 @@ Schema:
 
       const userContent = `QUESTION: ${question}${contextChunk}`;
 
-      // 12 second abort timeout
+      // 15 second abort timeout
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 12000);
+      const timeoutId = setTimeout(() => controller.abort(), 15000);
 
       try {
         const res = await fetch(endpoint, {
@@ -230,7 +233,7 @@ Schema:
             generationConfig: {
               responseMimeType: "application/json",
               temperature: 0.2,
-              maxOutputTokens: 1200
+              maxOutputTokens: 800 // Fast turnaround to prevent long waiting times
             }
           })
         });
@@ -251,7 +254,7 @@ Schema:
       } catch (err) {
         clearTimeout(timeoutId);
         if (err.name === "AbortError") {
-          throw new Error("Request timed out. Please retry.");
+          throw new Error("Request timed out after 15 seconds. Please retry.");
         }
         throw err;
       }
