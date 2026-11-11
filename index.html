@@ -169,7 +169,7 @@
             <div class="text-rose-400">
               <p class="font-semibold mb-1">❌ Request Failed</p>
               <p class="text-xs text-rose-300/80">${err.message}</p>
-              <p class="text-[11px] text-slate-400 mt-2">Check karein ki aapki Gemini API Key valid hai aur Google AI Studio me active hai.</p>
+              <p class="text-[11px] text-slate-400 mt-2">Google AI Studio me API key ke permissions aur free quota verify karein.</p>
             </div>
           `;
         }
@@ -193,8 +193,12 @@
     }
 
     async function callGemini(question, contextText) {
-      // Direct gemini-1.5-flash endpoint (Free Tier quota issue permanently resolved)
-      const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`;
+      // Primary: gemini-2.0-flash, Fallback: gemini-2.0-flash-lite / gemini-1.5-flash-8b
+      const candidateModels = [
+        "gemini-2.0-flash",
+        "gemini-2.0-flash-lite",
+        "gemini-1.5-flash-8b"
+      ];
 
       const systemPrompt = `You are a Study Buddy AI assistant for students.
 You handle two types of inputs:
@@ -207,10 +211,10 @@ TASK DETECTION RULES:
 - If user asks for summary or key takeaways -> type = "summary"
 - Otherwise -> type = "normal"
 
-OUTPUT FORMAT: Return strictly valid JSON with no markdown backticks and no text outside:
+OUTPUT FORMAT: Return strictly valid JSON with no markdown wrapping and no text outside:
 {
   "type": "quiz" | "explanation" | "summary" | "normal",
-  "response": "string (the main explanation, answer, or quiz intro)",
+  "response": "string",
   "quiz": [
     {
       "question": "string",
@@ -230,43 +234,47 @@ ${contextText && contextText.trim().length > 0 ? contextText : "No PDF uploaded.
 USER QUERY:
 ${question}`;
 
-      const res = await fetch(endpoint, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          systemInstruction: {
-            parts: [{ text: systemPrompt }]
-          },
-          contents: [{ parts: [{ text: userContent }] }],
-          generationConfig: {
-            responseMimeType: "application/json",
-            temperature: 0.3
+      let lastError = null;
+
+      for (const model of candidateModels) {
+        const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
+
+        try {
+          const res = await fetch(endpoint, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              systemInstruction: {
+                parts: [{ text: systemPrompt }]
+              },
+              contents: [{ parts: [{ text: userContent }] }],
+              generationConfig: {
+                responseMimeType: "application/json",
+                temperature: 0.3
+              }
+            })
+          });
+
+          if (!res.ok) {
+            const errData = await res.json().catch(() => ({}));
+            lastError = new Error(errData.error?.message || `HTTP ${res.status} on ${model}`);
+            continue; // agla model try karega agar 404 ya unavailable hua
           }
-        })
-      });
 
-      if (!res.ok) {
-        const errData = await res.json().catch(() => ({}));
-        throw new Error(errData.error?.message || `HTTP ${res.status}: Failed to reach Gemini API`);
+          const raw = await res.json();
+          const rawText = raw.candidates?.[0]?.content?.parts?.[0]?.text;
+
+          if (!rawText) {
+            throw new Error("Empty response received from Gemini.");
+          }
+
+          return JSON.parse(rawText);
+        } catch (e) {
+          lastError = e;
+        }
       }
 
-      const raw = await res.json();
-      const rawText = raw.candidates?.[0]?.content?.parts?.[0]?.text;
-
-      if (!rawText) {
-        throw new Error("Empty response received from Gemini.");
-      }
-
-      try {
-        return JSON.parse(rawText);
-      } catch (e) {
-        return {
-          type: "normal",
-          response: rawText,
-          quiz: [],
-          short_notes: []
-        };
-      }
+      throw lastError || new Error("Failed to connect with any available Gemini model.");
     }
 
     function renderResponse(elemId, data) {
