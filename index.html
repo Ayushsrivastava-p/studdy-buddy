@@ -46,8 +46,8 @@
       <!-- Quick Action Buttons -->
       <div class="bg-[#1c2541]/40 border border-slate-800/80 rounded-2xl p-4 flex flex-col gap-2">
         <p class="text-xs font-semibold text-slate-400 mb-1">Quick Prompts</p>
-        <button onclick="triggerQuickPrompt('Summarize the attached notes in bullet points.')" class="w-full text-left bg-slate-900/60 hover:bg-slate-800 border border-slate-700/60 rounded-xl p-2.5 text-xs text-slate-300 transition">📖 Summarize PDF</button>
-        <button onclick="triggerQuickPrompt('Generate a 5-question multiple choice quiz with answers.')" class="w-full text-left bg-slate-900/60 hover:bg-slate-800 border border-slate-700/60 rounded-xl p-2.5 text-xs text-slate-300 transition">❓ Generate Quiz (5 MCQs)</button>
+        <button onclick="triggerQuickPrompt('Summarize the attached notes in clean bullet points.')" class="w-full text-left bg-slate-900/60 hover:bg-slate-800 border border-slate-700/60 rounded-xl p-2.5 text-xs text-slate-300 transition">📖 Summarize PDF</button>
+        <button onclick="triggerQuickPrompt('Generate 5 multiple choice questions with answers at the end.')" class="w-full text-left bg-slate-900/60 hover:bg-slate-800 border border-slate-700/60 rounded-xl p-2.5 text-xs text-slate-300 transition">❓ Generate Quiz (5 MCQs)</button>
         <button onclick="triggerQuickPrompt('Explain the core concepts clearly in simple language.')" class="w-full text-left bg-slate-900/60 hover:bg-slate-800 border border-slate-700/60 rounded-xl p-2.5 text-xs text-slate-300 transition">📝 Explain Core Concepts</button>
       </div>
     </div>
@@ -190,15 +190,15 @@
     }
 
     async function callGemini(question, contextText) {
-      // Use direct gemini-2.5-flash with pure markdown output (superfast, no JSON delay)
-      const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`;
+      // Direct gemini-3.8-flash endpoint without JSON latency
+      const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent?key=${apiKey}`;
 
-      const prompt = `You are a concise Study Buddy AI. Keep explanations accurate, clear, and student-friendly. Use bullet points and bold headers where appropriate.
+      const prompt = `You are an academic Study Buddy AI. Keep explanations accurate, clear, and student-friendly. Use bold text and bullet points where helpful.
 
-${contextText && contextText.trim().length > 0 ? `DOCUMENT CONTEXT:\n${contextText.slice(0, 10000)}\n\n` : ''}QUESTION: ${question}`;
+${contextText && contextText.trim().length > 0 ? `DOCUMENT CONTEXT:\n${contextText.slice(0, 12000)}\n\n` : ''}QUESTION: ${question}`;
 
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 12000);
+      const timeoutId = setTimeout(() => controller.abort(), 15000);
 
       try {
         const res = await fetch(endpoint, {
@@ -213,7 +213,7 @@ ${contextText && contextText.trim().length > 0 ? `DOCUMENT CONTEXT:\n${contextTe
             ],
             generationConfig: {
               temperature: 0.3,
-              maxOutputTokens: 800
+              maxOutputTokens: 750
             }
           })
         });
@@ -243,14 +243,15 @@ ${contextText && contextText.trim().length > 0 ? `DOCUMENT CONTEXT:\n${contextTe
       const el = document.getElementById(elemId);
       if (!el) return;
 
-      // Clean simple markdown formatting (bold, newlines, lists)
+      // Clean HTML conversion for bold, italics, linebreaks, and bullet points
       let formatted = text
         .replace(/\*\*(.*?)\*\*/g, '<b>$1</b>')
         .replace(/\*(.*?)\*/g, '<i>$1</i>')
+        .replace(/^- (.*$)/gim, '• $1')
         .replace(/\n\n/g, '<br><br>')
         .replace(/\n/g, '<br>');
 
-      el.innerHTML = `<div class="leading-relaxed whitespace-pre-line">${formatted}</div>`;
+      el.innerHTML = `<div class="leading-relaxed whitespace-pre-line text-slate-200">${formatted}</div>`;
     }
   </script>
 </body>
